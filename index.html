@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="N5 日語筆記：旅行會話、漫畫與日劇。">
+  <meta name="theme-color" content="#f3ecdf">
+  <title>日語筆記</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='10' fill='%23c23b2e'/%3E%3Ctext x='32' y='46' text-anchor='middle' font-size='40' fill='white' font-family='sans-serif'%3E%E3%81%82%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;600;700&family=Noto+Sans+TC:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <a class="skip" href="#main">跳到筆記</a>
+  <div class="page">
+    <header class="site-header">
+      <div class="brand">
+        <p class="brand-kicker">旅行會話 · 漫畫 · 日劇</p>
+        <h1>日語筆記</h1>
+      </div>
+      <p class="level" aria-label="程度 N5">N5</p>
+    </header>
+
+    <div class="toolbar">
+      <form id="search-form" role="search">
+        <label class="visually-hidden" for="search">搜尋筆記</label>
+        <div class="search-row">
+          <input id="search" type="search" placeholder="搜尋日文、讀音或中文" autocomplete="off" autocapitalize="off" spellcheck="false" enterkeyhint="search">
+          <button type="button" id="clear-search" hidden>清除</button>
+        </div>
+      </form>
+
+      <nav aria-label="依日期瀏覽">
+        <div class="day-switch">
+          <button type="button" id="prev-day" disabled>前一天</button>
+          <div id="current-day" aria-live="polite"></div>
+          <button type="button" id="next-day" disabled>下一天</button>
+        </div>
+        <ul id="date-list"></ul>
+      </nav>
+    </div>
+
+    <main id="main">
+      <p id="status" class="status" role="status">正在載入筆記…</p>
+      <div id="results"></div>
+      <article id="note" hidden></article>
+    </main>
+
+    <footer class="site-footer">
+      <p>從會話開始，順便看懂漫畫和日劇。</p>
+    </footer>
+  </div>
+  <noscript><p class="status">請啟用 JavaScript 以閱讀筆記。</p></noscript>
+  <script src="js/app.js"></script>
+</body>
+</html>
