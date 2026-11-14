@@ -19,6 +19,19 @@
   const nextButton = document.getElementById("next-day");
   const currentDay = document.getElementById("current-day");
   const dateList = document.getElementById("date-list");
+  const mainEl = document.getElementById("main");
+  const speech = {
+    supported: typeof window.speechSynthesis !== "undefined" && typeof window.SpeechSynthesisUtterance === "function",
+    voice: null,
+    voicesReady: false,
+    noticeShown: false,
+    dismissed: false,
+    activeButton: null,
+    utterance: null,
+  };
+  const SPEECH_NOTICE = "此裝置沒有日文語音，無法播放。iPhone 可到 設定 > 輔助使用 > 朗讀內容 > 聲音 下載日文語音；Android 可在 文字轉語音設定 安裝日文語音資料。";
+
+  setupSpeech();
 
   searchForm.addEventListener("submit", function (event) {
     event.preventDefault();
@@ -64,6 +77,137 @@
   });
 
   init();
+
+  function setupSpeech() {
+    if (!speech.supported) {
+      showSpeechNotice();
+      return;
+    }
+    const synth = window.speechSynthesis;
+    if (typeof synth.addEventListener === "function") {
+      synth.addEventListener("voiceschanged", refreshVoices);
+    } else {
+      synth.onvoiceschanged = refreshVoices;
+    }
+    refreshVoices();
+  }
+
+  function refreshVoices() {
+    if (!speech.supported) return;
+    const voices = window.speechSynthesis.getVoices() || [];
+    if (!voices.length) return;
+    speech.voicesReady = true;
+    speech.voice = pickJapaneseVoice(voices);
+    if (!speech.voice) showSpeechNotice();
+  }
+
+  function pickJapaneseVoice(voices) {
+    const list = voices.filter(function (voice) {
+      return voice && typeof voice.lang === "string";
+    });
+    function langOf(voice) {
+      return voice.lang.toLowerCase().replace(/_/g, "-");
+    }
+    return list.find(function (voice) { return langOf(voice).startsWith("ja-jp"); })
+      || list.find(function (voice) { return langOf(voice).startsWith("ja"); })
+      || null;
+  }
+
+  function showSpeechNotice() {
+    if (speech.noticeShown || speech.dismissed) return;
+    speech.noticeShown = true;
+    const box = document.createElement("div");
+    box.className = "speech-notice";
+    box.setAttribute("role", "status");
+    const text = document.createElement("p");
+    text.textContent = SPEECH_NOTICE;
+    const close = document.createElement("button");
+    close.type = "button";
+    close.textContent = "關閉";
+    close.addEventListener("click", function () {
+      speech.dismissed = true;
+      box.remove();
+    });
+    box.append(text, close);
+    mainEl.insertBefore(box, mainEl.firstChild);
+  }
+
+  function createSpeakButton(japanese) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "speak";
+    button.setAttribute("aria-label", "播放日文發音");
+    button.setAttribute("aria-pressed", "false");
+    button.dataset.jp = japanese;
+    const icon = document.createElement("span");
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = "🔊";
+    button.appendChild(icon);
+    button.addEventListener("click", speakJapanese);
+    return button;
+  }
+
+  function speakJapanese(event) {
+    const button = event.currentTarget;
+    const text = button.dataset.jp || "";
+    if (!speech.supported) {
+      showSpeechNotice();
+      return;
+    }
+    const synth = window.speechSynthesis;
+    if (speech.activeButton === button) {
+      stopSpeech();
+      return;
+    }
+    const voices = synth.getVoices() || [];
+    if (voices.length) {
+      speech.voicesReady = true;
+      speech.voice = pickJapaneseVoice(voices);
+      if (!speech.voice) {
+        showSpeechNotice();
+        return;
+      }
+    }
+    const previous = speech.activeButton;
+    setPlaying(button);
+    if (previous) synth.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "ja-JP";
+    utterance.rate = 0.8;
+    if (speech.voice) utterance.voice = speech.voice;
+    function stillCurrent() {
+      return speech.utterance === utterance && speech.activeButton === button;
+    }
+    utterance.onend = function () {
+      if (stillCurrent()) setPlaying(null);
+    };
+    utterance.onerror = function () {
+      if (stillCurrent()) setPlaying(null);
+    };
+    speech.utterance = utterance;
+    synth.speak(utterance);
+  }
+
+  function setPlaying(button) {
+    if (speech.activeButton && speech.activeButton !== button) {
+      speech.activeButton.classList.remove("is-playing");
+      speech.activeButton.setAttribute("aria-pressed", "false");
+    }
+    speech.activeButton = button;
+    if (!button) {
+      speech.utterance = null;
+      return;
+    }
+    button.classList.add("is-playing");
+    button.setAttribute("aria-pressed", "true");
+  }
+
+  function stopSpeech() {
+    const synth = speech.supported ? window.speechSynthesis : null;
+    const shouldCancel = Boolean(speech.activeButton || speech.utterance);
+    setPlaying(null);
+    if (synth && shouldCancel) synth.cancel();
+  }
 
   async function init() {
     if (location.protocol === "file:") {
@@ -165,6 +309,7 @@
   }
 
   function render() {
+    if (speech.activeButton) stopSpeech();
     renderDateList();
     renderSwitcher();
     const query = state.query.trim();
@@ -309,11 +454,14 @@
   function renderPhrase(item, query, className) {
     const card = document.createElement("article");
     card.className = "card " + className;
+    const line = document.createElement("div");
+    line.className = "jp-line";
     const jp = document.createElement("p");
     jp.className = "jp";
     jp.lang = "ja";
     appendHighlighted(jp, item.jp, query);
-    card.appendChild(jp);
+    line.append(jp, createSpeakButton(item.jp));
+    card.appendChild(line);
     if (!sameText(item.jp, item.reading)) {
       const reading = document.createElement("p");
       reading.className = "reading";
