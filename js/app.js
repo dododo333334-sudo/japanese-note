@@ -459,10 +459,14 @@
     const jp = document.createElement("p");
     jp.className = "jp";
     jp.lang = "ja";
-    appendHighlighted(jp, item.jp, query);
+    if (item.segments && item.segments.length) {
+      renderSegments(jp, item.segments, query);
+    } else {
+      appendHighlighted(jp, item.jp, query);
+    }
     line.append(jp, createSpeakButton(item.jp));
     card.appendChild(line);
-    if (!sameText(item.jp, item.reading)) {
+    if (!(item.segments && item.segments.length) && !sameText(item.jp, item.reading)) {
       const reading = document.createElement("p");
       reading.className = "reading";
       reading.lang = "ja";
@@ -475,6 +479,21 @@
     appendHighlighted(zh, item.zh, query);
     card.appendChild(zh);
     return card;
+  }
+
+  function renderSegments(parent, segments, query) {
+    segments.forEach(function (segment) {
+      if (!segment.r) {
+        appendHighlighted(parent, segment.t, query);
+        return;
+      }
+      const ruby = document.createElement("ruby");
+      appendHighlighted(ruby, segment.t, query);
+      const rt = document.createElement("rt");
+      appendHighlighted(rt, segment.r, query);
+      ruby.appendChild(rt);
+      parent.appendChild(ruby);
+    });
   }
 
   function renderCorrection(item, query) {
@@ -599,7 +618,7 @@
     const needle = String(query || "").trim().toLowerCase();
     const haystack = source.toLowerCase();
     if (!needle || haystack.length !== source.length || needle.length !== String(query || "").trim().length) {
-      parent.textContent = source;
+      parent.appendChild(document.createTextNode(source));
       return;
     }
     let cursor = 0;

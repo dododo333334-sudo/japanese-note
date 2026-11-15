@@ -29,6 +29,236 @@ SECTION_OF = {
 HEADER_OF = {value: key for key, value in SECTION_OF.items()}
 TRIPLE_KEYS = ("patterns", "vocabulary", "examples", "corrections")
 REQUIRED_KEYS = ("topic", "patterns", "vocabulary")
+OVERRIDES_PATH = NOTES_DIR / "ruby-overrides.json"
+
+# Punctuation and whitespace are ignored when a kana anchor is matched to the reading.
+_STRIPPED = frozenset(
+    " \t\r\n\u3000。、？！?!，,．.・「」『』（）()［］[]【】／/…‥〜~～､｡･：:；;・"
+)
+
+
+def _is_base(char: str) -> bool:
+    """Kanji, 々, and the ideographic placeholder 〇 get furigana."""
+    if char in "々〇○〻":
+        return True
+    code = ord(char)
+    return (
+        0x3400 <= code <= 0x4DBF
+        or 0x4E00 <= code <= 0x9FFF
+        or 0xF900 <= code <= 0xFAFF
+        or 0x20000 <= code <= 0x2CEAF
+    )
+
+
+def _kata_to_hira(char: str) -> str:
+    code = ord(char)
+    if 0x30A1 <= code <= 0x30F6:
+        return chr(code - 0x60)
+    return char
+
+
+def _normalize_with_map(text: str) -> tuple[str, list[int]]:
+    normalized: list[str] = []
+    mapping: list[int] = []
+    for index, char in enumerate(text):
+        if char in _STRIPPED or char.isspace():
+            continue
+        normalized.append(_kata_to_hira(char))
+        mapping.append(index)
+    return "".join(normalized), mapping
+
+
+def _normalize(text: str) -> str:
+    return _normalize_with_map(text)[0]
+
+
+def _tokenize(surface: str) -> list[tuple[str, str]]:
+    tokens: list[tuple[str, str]] = []
+    for char in surface:
+        if _is_base(char):
+            kind = "base"
+        elif char in _STRIPPED or char.isspace():
+            kind = "punct"
+        else:
+            kind = "kana"
+        if tokens and tokens[-1][0] == kind:
+            tokens[-1] = (kind, tokens[-1][1] + char)
+        else:
+            tokens.append((kind, char))
+    collapsed: list[tuple[str, str]] = []
+    index = 0
+    while index < len(tokens):
+        kind, text = tokens[index]
+        if (
+            kind == "base"
+            and index + 2 < len(tokens)
+            and tokens[index + 1][0] == "punct"
+            and tokens[index + 2][0] == "base"
+        ):
+            merged = text + tokens[index + 1][1] + tokens[index + 2][1]
+            index += 3
+            while (
+                index + 1 < len(tokens)
+                and tokens[index][0] == "punct"
+                and tokens[index + 1][0] == "base"
+            ):
+                merged += tokens[index][1] + tokens[index + 1][1]
+                index += 2
+            collapsed.append(("base", merged))
+            continue
+        collapsed.append((kind, text))
+        index += 1
+    return collapsed
+
+
+def _match_spans(tokens: list[tuple[str, str]], reading_norm: str) -> dict[int, tuple[int, int]] | None:
+    """Assign every kanji run a non-empty span of the normalized reading.
+
+    Kana runs are anchors. Backtracking handles an anchor that also occurs
+    inside a kanji reading. Consecutive kanji stay one run, so the match is
+    pinned by the anchors around that run.
+    """
+    sequence: list[tuple[str, object]] = []
+    for token_index, (kind, text) in enumerate(tokens):
+        if kind == "punct":
+            continue
+        if kind == "base":
+            sequence.append(("base", token_index))
+            continue
+        anchor = _normalize(text)
+        if anchor:
+            sequence.append(("anchor", anchor))
+
+    if not sequence:
+        return {} if reading_norm == "" else None
+
+    solutions: list[dict[int, tuple[int, int]]] = []
+
+    def walk(seq_index: int, pos: int, assigned: dict[int, tuple[int, int]]) -> None:
+        if len(solutions) > 1:
+            return
+        if seq_index == len(sequence):
+            if pos == len(reading_norm):
+                solutions.append(dict(assigned))
+            return
+        kind, data = sequence[seq_index]
+        if kind == "anchor":
+            anchor = str(data)
+            if reading_norm.startswith(anchor, pos):
+                walk(seq_index + 1, pos + len(anchor), assigned)
+            return
+        later = sequence[seq_index + 1 :]
+        reserved = sum(len(str(item[1])) for item in later if item[0] == "anchor")
+        reserved += sum(1 for item in later if item[0] == "base")
+        last = len(reading_norm) - reserved
+        token_index = int(data)
+        for end in range(pos + 1, last + 1):
+            assigned[token_index] = (pos, end)
+            walk(seq_index + 1, end, assigned)
+            if len(solutions) > 1:
+                return
+
+    walk(0, 0, {})
+    if len(solutions) != 1:
+        return None
+    return solutions[0]
+
+
+def _fallback_segments(surface: str, reading: str) -> list[dict[str, str]]:
+    if _normalize(surface) == _normalize(reading):
+        return [{"t": surface}]
+    return [{"t": surface, "r": reading}]
+
+
+def _segments_cover(surface: str, segments: object) -> bool:
+    if not isinstance(segments, list) or not segments:
+        return False
+    parts: list[str] = []
+    for segment in segments:
+        if not isinstance(segment, dict):
+            return False
+        text = segment.get("t")
+        if not isinstance(text, str) or text == "":
+            return False
+        if "r" in segment and (not isinstance(segment["r"], str) or segment["r"] == ""):
+            return False
+        parts.append(text)
+    return "".join(parts) == surface
+
+
+def align_reading(
+    surface: str,
+    reading: str,
+    overrides: dict | None = None,
+) -> tuple[list[dict[str, str]], bool]:
+    """Return furigana segments and whether a whole-word fallback was used.
+
+    ``overrides`` maps the Japanese surface to a segments array. A missing or
+    invalid override falls through to automatic alignment.
+    """
+    if overrides and surface in overrides and _segments_cover(surface, overrides[surface]):
+        return overrides[surface], False
+
+    try:
+        tokens = _tokenize(surface)
+        reading_norm, reading_map = _normalize_with_map(reading)
+        spans = _match_spans(tokens, reading_norm)
+        if spans is None:
+            return _fallback_segments(surface, reading), True
+        segments: list[dict[str, str]] = []
+
+        def add_plain(text: str) -> None:
+            if segments and "r" not in segments[-1]:
+                segments[-1]["t"] += text
+            else:
+                segments.append({"t": text})
+
+        for token_index, (kind, text) in enumerate(tokens):
+            if kind != "base":
+                add_plain(text)
+                continue
+            start, end = spans[token_index]
+            ruby = "".join(reading[reading_map[index]] for index in range(start, end))
+            if not ruby:
+                return _fallback_segments(surface, reading), True
+            segments.append({"t": text, "r": ruby})
+        if not _segments_cover(surface, segments):
+            return _fallback_segments(surface, reading), True
+        return segments, False
+    except Exception:
+        return _fallback_segments(surface, reading), True
+
+
+def load_overrides() -> dict:
+    if not OVERRIDES_PATH.exists():
+        return {}
+    try:
+        data = json.loads(OVERRIDES_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        print("警告：notes/ruby-overrides.json 無法讀取，已略過手動注音。", file=sys.stderr)
+        return {}
+    if not isinstance(data, dict):
+        print("警告：notes/ruby-overrides.json 格式不正確，已略過手動注音。", file=sys.stderr)
+        return {}
+    return data
+
+
+def attach_segments(note: dict, overrides: dict | None = None) -> list[str]:
+    """Add segments to patterns, vocabulary, and examples. Never raises."""
+    chosen = load_overrides() if overrides is None else overrides
+    warnings: list[str] = []
+    for key in ("patterns", "vocabulary", "examples"):
+        updated = []
+        for entry in note.get(key, []):
+            try:
+                segments, fallback = align_reading(entry["jp"], entry["reading"], chosen)
+            except Exception:
+                segments, fallback = _fallback_segments(entry.get("jp", ""), entry.get("reading", "")), True
+            if fallback:
+                warnings.append(f"警告：無法對齊讀音：{entry.get('jp', '')}｜{entry.get('reading', '')}")
+            updated.append({**entry, "segments": segments})
+        note[key] = updated
+    return warnings
 
 
 class NoteError(Exception):
@@ -240,6 +470,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         note = parse_note(read_source(args.path))
+        for warning in attach_segments(note):
+            print(warning, file=sys.stderr)
         exists = day_exists(note["date"])
         if exists and not args.force:
             raise NoteError([f"錯誤：{note['date']} 的筆記已存在。若要覆寫請加上 --force"])

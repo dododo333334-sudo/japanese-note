@@ -296,7 +296,25 @@ button:disabled {
   gap: 0.5rem;
 }
 
-.jp-line .jp { flex: 1; min-width: 0; padding-top: 0.28rem; }
+.jp-line .jp {
+  flex: 1;
+  min-width: 0;
+  padding-top: 0.15rem;
+  line-height: 2.65;
+  overflow: visible;
+}
+
+.jp ruby {
+  ruby-position: over;
+  ruby-align: center;
+}
+
+.jp rt {
+  font-size: 0.78rem;
+  font-weight: 500;
+  line-height: 1.25;
+  color: var(--muted);
+}
 
 button.speak {
   flex: 0 0 auto;
