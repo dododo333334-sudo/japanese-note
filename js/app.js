@@ -395,6 +395,11 @@
     noteEl.appendChild(sectionBlock("句型", note.patterns.map(function (item) {
       return renderPhrase(item, "", "phrase");
     }), "stack"));
+    if (note.grammar && note.grammar.length) {
+      noteEl.appendChild(sectionBlock("文法", note.grammar.map(function (item) {
+        return renderGrammar(item, "");
+      }), "stack"));
+    }
     noteEl.appendChild(sectionBlock("單字", note.vocabulary.map(function (item) {
       return renderPhrase(item, "", "phrase");
     }), "vocab-list"));
@@ -434,6 +439,7 @@
       note.patterns.length + " 個句型",
       note.vocabulary.length + " 個單字",
     ];
+    if (note.grammar && note.grammar.length) parts.push(note.grammar.length + " 個文法");
     if (note.examples && note.examples.length) parts.push(note.examples.length + " 個例句");
     if (note.corrections && note.corrections.length) parts.push(note.corrections.length + " 則訂正");
     return parts.join(" · ");
@@ -494,6 +500,54 @@
       ruby.appendChild(rt);
       parent.appendChild(ruby);
     });
+  }
+
+  function renderGrammar(item, query) {
+    const card = document.createElement("article");
+    card.className = "card grammar";
+    const point = document.createElement("h4");
+    point.className = "grammar-point";
+    appendHighlighted(point, item.point, query);
+    const explanation = document.createElement("p");
+    explanation.className = "grammar-explain";
+    appendHighlighted(explanation, item.explanation, query);
+    card.append(point, explanation);
+    (item.examples || []).forEach(function (example) {
+      card.appendChild(renderGrammarExample(example, query));
+    });
+    return card;
+  }
+
+  function renderGrammarExample(example, query) {
+    const block = document.createElement("div");
+    block.className = "grammar-example";
+    const line = document.createElement("div");
+    line.className = "jp-line";
+    const jp = document.createElement("p");
+    jp.className = "jp";
+    jp.lang = "ja";
+    if (example.segments && example.segments.length) {
+      renderSegments(jp, example.segments, query);
+    } else {
+      appendHighlighted(jp, example.jp, query);
+    }
+    line.append(jp, createSpeakButton(example.jp));
+    block.appendChild(line);
+    if (!(example.segments && example.segments.length) && example.reading && !sameText(example.jp, example.reading)) {
+      const reading = document.createElement("p");
+      reading.className = "reading";
+      reading.lang = "ja";
+      appendHighlighted(reading, example.reading, query);
+      block.appendChild(reading);
+    }
+    if (example.zh) {
+      const zh = document.createElement("p");
+      zh.className = "zh";
+      zh.lang = "zh-Hant";
+      appendHighlighted(zh, example.zh, query);
+      block.appendChild(zh);
+    }
+    return block;
   }
 
   function renderCorrection(item, query) {
@@ -563,6 +617,8 @@
           block.appendChild(topic);
         } else if (hit.kind === "錯誤訂正") {
           block.appendChild(renderCorrection(hit.item, query));
+        } else if (hit.kind === "文法") {
+          block.appendChild(renderGrammar(hit.item, query));
         } else {
           block.appendChild(renderPhrase(hit.item, query, "phrase"));
         }
@@ -594,6 +650,13 @@
         if (matches(entry.jp, query) || matches(entry.reading, query) || matches(entry.zh, query)) {
           hits.push({ kind: "例句", item: entry });
         }
+      });
+      (note.grammar || []).forEach(function (entry) {
+        const inPoint = matches(entry.point, query) || matches(entry.explanation, query);
+        const inExample = (entry.examples || []).some(function (example) {
+          return matches(example.jp, query) || matches(example.reading, query) || matches(example.zh, query);
+        });
+        if (inPoint || inExample) hits.push({ kind: "文法", item: entry });
       });
       (note.corrections || []).forEach(function (entry) {
         if (matches(entry.wrong, query) || matches(entry.correct, query) || matches(entry.explanation, query)) {
