@@ -22,6 +22,7 @@ INDEX_PATH = NOTES_DIR / "index.json"
 SECTION_OF = {
     "【主題】": "topic",
     "【句型】": "patterns",
+    "【文法】": "grammar",
     "【單字】": "vocabulary",
     "【例句】": "examples",
     "【錯誤訂正】": "corrections",
@@ -243,21 +244,29 @@ def load_overrides() -> dict:
     return data
 
 
+def _with_segments(entry: dict, overrides: dict, warnings: list[str]) -> dict:
+    reading = entry.get("reading") or ""
+    if not reading:
+        return {**entry, "segments": [{"t": entry.get("jp", "")}]}
+    try:
+        segments, fallback = align_reading(entry["jp"], reading, overrides)
+    except Exception:
+        segments, fallback = _fallback_segments(entry.get("jp", ""), reading), True
+    if fallback:
+        warnings.append(f"警告：無法對齊讀音：{entry.get('jp', '')}｜{reading}")
+    return {**entry, "segments": segments}
+
+
 def attach_segments(note: dict, overrides: dict | None = None) -> list[str]:
-    """Add segments to patterns, vocabulary, and examples. Never raises."""
+    """Add segments to patterns, vocabulary, examples, and grammar. Never raises."""
     chosen = load_overrides() if overrides is None else overrides
     warnings: list[str] = []
     for key in ("patterns", "vocabulary", "examples"):
-        updated = []
-        for entry in note.get(key, []):
-            try:
-                segments, fallback = align_reading(entry["jp"], entry["reading"], chosen)
-            except Exception:
-                segments, fallback = _fallback_segments(entry.get("jp", ""), entry.get("reading", "")), True
-            if fallback:
-                warnings.append(f"警告：無法對齊讀音：{entry.get('jp', '')}｜{entry.get('reading', '')}")
-            updated.append({**entry, "segments": segments})
-        note[key] = updated
+        note[key] = [_with_segments(entry, chosen, warnings) for entry in note.get(key, [])]
+    for item in note.get("grammar", []):
+        item["examples"] = [
+            _with_segments(example, chosen, warnings) for example in item.get("examples", [])
+        ]
     return warnings
 
 
@@ -287,6 +296,8 @@ def parse_note(text: str) -> dict:
     current_count = 0
     topic_lines: list[str] = []
     rows: dict[str, list[list[str]]] = {key: [] for key in TRIPLE_KEYS}
+    grammar_items: list[dict] = []
+    grammar_warnings: list[str] = []
 
     def close_section() -> None:
         if current is None or current_count > 0:
@@ -344,6 +355,11 @@ def parse_note(text: str) -> dict:
         if current == "topic":
             topic_lines.append(stripped)
             continue
+        if current == "grammar":
+            item = _parse_grammar_line(stripped, line_no, add, grammar_warnings)
+            if item is not None:
+                grammar_items.append(item)
+            continue
 
         parts = [part.strip() for part in re.split(r"[|｜]", stripped)]
         header = HEADER_OF[current]
@@ -393,7 +409,61 @@ def parse_note(text: str) -> dict:
             {"wrong": wrong, "correct": correct, "explanation": explanation}
             for wrong, correct, explanation in rows["corrections"]
         ],
+        "grammar": grammar_items,
+        "_warnings": grammar_warnings,
     }
+
+
+def _contains_kanji(text: str) -> bool:
+    return any(_is_base(char) for char in text)
+
+
+def _parse_grammar_line(
+    line: str,
+    line_no: int,
+    add,
+    warnings: list[str],
+) -> dict | None:
+    """Split a grammar line on the first two pipes only.
+
+    The explanation may contain ｜, ；, and ／. Example separators apply only
+    to the third field.
+    """
+    parts = [part.strip() for part in re.split(r"[|｜]", line, maxsplit=2)]
+    if len(parts) != 3:
+        add(line_no, f"【文法】欄位數量應為 3，實際為 {len(parts)}")
+        return None
+    point, explanation, examples_field = parts
+    missing = [str(index) for index, part in enumerate(parts, 1) if part == ""]
+    if missing:
+        add(line_no, f"【文法】第 {'、'.join(missing)} 個欄位不可為空")
+        return None
+    examples = []
+    ok = True
+    for chunk in re.split(r"[;；]", examples_field):
+        piece = chunk.strip()
+        if piece == "":
+            add(line_no, "【文法】例句不可為空")
+            ok = False
+            continue
+        fields = [field.strip() for field in re.split(r"[/／]", piece)]
+        if len(fields) > 3:
+            add(line_no, f"【文法】例句最多三欄（日文／讀音／中文）：{piece}")
+            ok = False
+            continue
+        if fields[0] == "":
+            add(line_no, "【文法】例句的日文不可為空")
+            ok = False
+            continue
+        jp = fields[0]
+        reading = fields[1] if len(fields) > 1 else ""
+        zh = fields[2] if len(fields) > 2 else ""
+        if not reading and _contains_kanji(jp):
+            warnings.append(f"警告：第 {line_no} 行：文法例句含漢字但沒有讀音：{jp}")
+        examples.append({"jp": jp, "reading": reading, "zh": zh})
+    if not ok or not examples:
+        return None
+    return {"point": point, "explanation": explanation, "examples": examples}
 
 
 def merge_index(entries: list[dict], note: dict) -> list[dict]:
@@ -470,7 +540,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         note = parse_note(read_source(args.path))
-        for warning in attach_segments(note):
+        warnings = list(note.pop("_warnings", []))
+        warnings.extend(attach_segments(note))
+        for warning in warnings:
             print(warning, file=sys.stderr)
         exists = day_exists(note["date"])
         if exists and not args.force:
