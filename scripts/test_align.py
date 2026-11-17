@@ -180,6 +180,17 @@ b|b|乙
         self.assertEqual(examples[1]["zh"], "")
         self.assertEqual(examples[1]["reading"], "みずをのむ")
 
+    def test_topic_on_header_line(self) -> None:
+        text = """日期：2026-11-17
+【主題】餐廳點餐（二）：要水、筷子、收據與離店用語
+【句型】
+a｜a｜甲
+【單字】
+b｜b｜乙
+"""
+        note = add_note.parse_note(text)
+        self.assertEqual(note["topic"], "餐廳點餐（二）：要水、筷子、收據與離店用語")
+
     def test_note_without_grammar(self) -> None:
         text = Path(__file__).resolve().parents[1].joinpath("examples/2026-11-14.txt").read_text(encoding="utf-8")
         note = add_note.parse_note(text)

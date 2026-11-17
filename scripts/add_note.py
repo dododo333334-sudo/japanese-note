@@ -331,47 +331,54 @@ def parse_note(text: str) -> dict:
             date = value
             continue
 
+        def consume_content(content: str, content_line: int) -> None:
+            nonlocal current_count
+            current_count += 1
+            if current == "topic":
+                topic_lines.append(content)
+                return
+            if current == "grammar":
+                item = _parse_grammar_line(content, content_line, add, grammar_warnings)
+                if item is not None:
+                    grammar_items.append(item)
+                return
+            parts = [part.strip() for part in re.split(r"[|｜]", content)]
+            header = HEADER_OF[current]
+            if len(parts) != 3:
+                add(content_line, f"{header}欄位數量應為 3，實際為 {len(parts)}")
+                return
+            empty_at = [index for index, part in enumerate(parts, 1) if part == ""]
+            if empty_at:
+                joined = "、".join(str(index) for index in empty_at)
+                add(content_line, f"{header}第 {joined} 個欄位不可為空")
+                return
+            rows[current].append(parts)
+
         if stripped.startswith("【"):
             close_section()
-            if stripped not in SECTION_OF:
+            header_name = _match_header(stripped)
+            if header_name is None:
                 add(line_no, f"未知的區段標題「{stripped}」")
                 current = None
                 current_count = 0
                 continue
-            key = SECTION_OF[stripped]
+            key = SECTION_OF[header_name]
             if key in seen:
-                add(line_no, f"區段{stripped}重複")
+                add(line_no, f"區段{header_name}重複")
             seen[key] = line_no
             current = key
             current_header_line = line_no
             current_count = 0
+            rest = stripped[len(header_name):].strip()
+            if rest:
+                consume_content(rest, line_no)
             continue
 
         if current is None:
             add(line_no, "這一行不在任何區段裡")
             continue
 
-        current_count += 1
-        if current == "topic":
-            topic_lines.append(stripped)
-            continue
-        if current == "grammar":
-            item = _parse_grammar_line(stripped, line_no, add, grammar_warnings)
-            if item is not None:
-                grammar_items.append(item)
-            continue
-
-        parts = [part.strip() for part in re.split(r"[|｜]", stripped)]
-        header = HEADER_OF[current]
-        if len(parts) != 3:
-            add(line_no, f"{header}欄位數量應為 3，實際為 {len(parts)}")
-            continue
-        empty_at = [index for index, part in enumerate(parts, 1) if part == ""]
-        if empty_at:
-            joined = "、".join(str(index) for index in empty_at)
-            add(line_no, f"{header}第 {joined} 個欄位不可為空")
-            continue
-        rows[current].append(parts)
+        consume_content(stripped, line_no)
 
     close_section()
 
@@ -412,6 +419,16 @@ def parse_note(text: str) -> dict:
         "grammar": grammar_items,
         "_warnings": grammar_warnings,
     }
+
+
+def _match_header(line: str) -> str | None:
+    """Return the section header at the start of a line, if it is a known one."""
+    found = ""
+    for name in SECTION_OF:
+        if line == name or line.startswith(name):
+            if len(name) > len(found):
+                found = name
+    return found or None
 
 
 def _contains_kanji(text: str) -> bool:
