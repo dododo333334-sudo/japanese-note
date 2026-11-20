@@ -15,11 +15,9 @@
   const searchForm = document.getElementById("search-form");
   const searchInput = document.getElementById("search");
   const clearButton = document.getElementById("clear-search");
-  const prevButton = document.getElementById("prev-day");
-  const nextButton = document.getElementById("next-day");
-  const currentDay = document.getElementById("current-day");
-  const dateList = document.getElementById("date-list");
   const mainEl = document.getElementById("main");
+  const FIXED_SITUATIONS = ["招呼用語", "問路與求助", "便利商店", "餐廳", "搭車與買票", "時間與數字"];
+  const UNCATEGORIZED = "未分類";
   const speech = {
     supported: typeof window.speechSynthesis !== "undefined" && typeof window.SpeechSynthesisUtterance === "function",
     voice: null,
@@ -50,30 +48,11 @@
     searchInput.focus();
   });
 
-  prevButton.addEventListener("click", function () {
-    step(-1);
-  });
-
-  nextButton.addEventListener("click", function () {
-    step(1);
-  });
-
   window.addEventListener("hashchange", function () {
-    const requested = dateFromHash();
-    if (!requested) {
-      const newest = newestDate();
-      if (newest) openDate(newest, { replace: true });
-      return;
-    }
-    if (!state.notes.has(requested)) {
-      state.notice = "沒有 " + requested + " 的筆記，已改顯示最新的一天。";
-      const newest = newestDate();
-      if (newest) openDate(newest, { replace: true });
-      else render();
-      return;
-    }
-    if (requested === state.current && !state.query) return;
-    openDate(requested);
+    if (state.query) resetSearch();
+    state.route = parseRoute();
+    render();
+    window.scrollTo(0, 0);
   });
 
   init();
@@ -224,15 +203,14 @@
         const note = await fetchJson("notes/" + item.date + ".json");
         state.notes.set(item.date, note);
       }));
-      const requested = dateFromHash();
       if (!state.index.length) {
         setStatus("尚無筆記。");
         return;
       }
-      if (requested && !state.notes.has(requested)) {
-        state.notice = "沒有 " + requested + " 的筆記，已改顯示最新的一天。";
-      }
-      openDate(state.notes.has(requested) ? requested : newestDate(), { replace: true });
+      buildCatalog();
+      state.route = parseRoute();
+      if (!location.hash) history.replaceState(null, "", "#home");
+      render();
     } catch (error) {
       setStatus("無法載入筆記。");
     }
@@ -257,61 +235,118 @@
     });
   }
 
-  function newestDate() {
-    return state.index.length ? state.index[state.index.length - 1].date : "";
-  }
-
-  function dateFromHash() {
-    const raw = location.hash.replace(/^#/, "");
-    if (!raw) return "";
-    try {
-      return decodeURIComponent(raw);
-    } catch (error) {
-      return raw;
-    }
-  }
-
-  function dates() {
-    return state.index.map(function (item) { return item.date; });
-  }
-
   function resetSearch() {
     searchInput.value = "";
     state.query = "";
     clearButton.hidden = true;
   }
 
-  function step(delta) {
-    const list = dates();
-    const target = list[list.indexOf(state.current) + delta];
-    if (!target) return;
-    state.notice = "";
-    resetSearch();
-    openDate(target);
+  function parseRoute() {
+    const raw = location.hash.replace(/^#/, "");
+    if (!raw || raw === "home") return { page: "home", situation: "" };
+    if (raw === "mistakes") return { page: "mistakes", situation: "" };
+    if (raw.indexOf("c/") === 0) {
+      let name = raw.slice(2);
+      try { name = decodeURIComponent(name); } catch (error) { /* keep raw */ }
+      return { page: "category", situation: name };
+    }
+    return { page: "home", situation: "" };
   }
 
-  function openDate(date, options) {
-    const replace = options && options.replace;
-    if (!state.notes.has(date)) {
-      render();
+  function routeHash(route) {
+    if (!route || route.page === "home") return "#home";
+    if (route.page === "mistakes") return "#mistakes";
+    return "#c/" + encodeURIComponent(route.situation);
+  }
+
+  function navigate(route) {
+    state.notice = "";
+    resetSearch();
+    state.route = route;
+    const hash = routeHash(route);
+    if (location.hash !== hash) {
+      location.hash = hash;
       return;
     }
-    state.current = date;
-    if (dateFromHash() !== date) {
-      if (replace) history.replaceState(null, "", "#" + date);
-      else location.hash = date;
-    }
     render();
-    const active = dateList.querySelector('[aria-current="date"]');
-    if (active && active.scrollIntoView) {
-      active.scrollIntoView({ inline: "center", block: "nearest" });
+    window.scrollTo(0, 0);
+  }
+
+  function buildCatalog() {
+    const buckets = new Map();
+    const extra = [];
+    function bucketFor(name) {
+      if (!buckets.has(name)) {
+        buckets.set(name, { patterns: [], grammar: [], vocabulary: [], examples: [] });
+        if (FIXED_SITUATIONS.indexOf(name) === -1 && name !== UNCATEGORIZED) extra.push(name);
+      }
+      return buckets.get(name);
     }
+    FIXED_SITUATIONS.forEach(bucketFor);
+    state.mistakes = [];
+    state.index.forEach(function (item) {
+      const note = state.notes.get(item.date);
+      if (!note) return;
+      addEntries(bucketFor, "patterns", note.patterns, item.date);
+      addEntries(bucketFor, "grammar", note.grammar, item.date);
+      addEntries(bucketFor, "vocabulary", note.vocabulary, item.date);
+      addEntries(bucketFor, "examples", note.examples, item.date);
+      (note.corrections || []).forEach(function (entry) {
+        state.mistakes.push({ item: entry, date: item.date });
+      });
+    });
+    state.mistakes.sort(function (a, b) { return b.date.localeCompare(a.date); });
+    const names = FIXED_SITUATIONS.concat(extra);
+    if ((buckets.get(UNCATEGORIZED) || { patterns: [] }).patterns.length
+      || entryCount(buckets.get(UNCATEGORIZED))) {
+      names.push(UNCATEGORIZED);
+    }
+    state.catalog = names.filter(function (name) {
+      return name === UNCATEGORIZED ? entryCount(buckets.get(name)) > 0 : buckets.has(name);
+    }).map(function (name) {
+      return { name: name, groups: buckets.get(name) };
+    });
+  }
+
+  function addEntries(bucketFor, kind, entries, date) {
+    (entries || []).forEach(function (entry) {
+      const name = entry.situation || UNCATEGORIZED;
+      const bucket = bucketFor(name);
+      const key = dedupeKey(kind, entry);
+      const existing = bucket[kind].find(function (row) { return row.key === key; });
+      if (existing) {
+        if (existing.dates.indexOf(date) === -1) existing.dates.push(date);
+        return;
+      }
+      bucket[kind].push({ key: key, item: entry, dates: [date] });
+    });
+  }
+
+  function dedupeKey(kind, entry) {
+    if (kind === "grammar") {
+      const examples = (entry.examples || []).map(function (example) {
+        return [example.jp, example.reading, example.zh].join("\u0001");
+      }).join("\u0002");
+      return [entry.point, entry.explanation, examples].join("\u0000");
+    }
+    return [entry.jp, entry.reading, entry.zh].join("\u0000");
+  }
+
+  function entryCount(groups) {
+    if (!groups) return 0;
+    return groups.patterns.length + groups.grammar.length + groups.vocabulary.length + groups.examples.length;
+  }
+
+  function sortedRows(rows) {
+    return rows.slice().sort(function (a, b) {
+      const left = a.dates.slice().sort().pop();
+      const right = b.dates.slice().sort().pop();
+      return right.localeCompare(left);
+    });
   }
 
   function render() {
     if (speech.activeButton) stopSpeech();
-    renderDateList();
-    renderSwitcher();
     const query = state.query.trim();
     if (query) {
       noteEl.hidden = true;
@@ -319,74 +354,127 @@
       const found = searchNotes(query);
       renderResults(found, query);
       document.title = "搜尋｜日語筆記";
-      if (!found.length) {
-        setStatus("找不到符合「" + query + "」的內容。");
-      } else {
+      if (!found.length) setStatus("找不到符合「" + query + "」的內容。");
+      else {
         const count = found.reduce(function (sum, group) { return sum + group.hits.length; }, 0);
         setStatus("找到 " + count + " 筆。");
       }
       return;
     }
     resultsEl.replaceChildren();
-    if (!state.current || !state.notes.has(state.current)) {
-      noteEl.hidden = true;
-      setStatus(state.index.length ? "尚無筆記。" : "尚無筆記。");
+    hideStatus();
+    noteEl.hidden = false;
+    const route = state.route || { page: "home" };
+    if (route.page === "mistakes") {
+      renderMistakes();
+      document.title = "我常犯的錯｜日語筆記";
       return;
     }
-    if (state.notice) setStatus(state.notice);
-    else hideStatus();
-    noteEl.hidden = false;
-    renderNote(state.notes.get(state.current));
-    const note = state.notes.get(state.current);
-    document.title = note.date + " " + note.topic + "｜日語筆記";
+    if (route.page === "category") {
+      const category = (state.catalog || []).find(function (item) { return item.name === route.situation; });
+      if (!category) {
+        noteEl.replaceChildren();
+        setStatus("沒有「" + route.situation + "」這個情境。");
+        document.title = "日語筆記";
+        return;
+      }
+      renderCategory(category);
+      document.title = category.name + "｜日語筆記";
+      return;
+    }
+    renderHome();
+    document.title = "日語筆記";
   }
 
-  function renderSwitcher() {
-    const list = dates();
-    const index = list.indexOf(state.current);
-    prevButton.disabled = index <= 0;
-    nextButton.disabled = index === -1 || index >= list.length - 1;
-    currentDay.replaceChildren();
-    if (index === -1) return;
-    const note = state.notes.get(state.current);
-    const date = document.createElement("p");
-    date.className = "current-date";
-    date.textContent = formatShort(state.current);
-    const topic = document.createElement("p");
-    topic.className = "current-topic";
-    topic.textContent = note ? note.topic : "";
-    currentDay.append(date, topic);
-  }
-
-  function renderDateList() {
-    dateList.replaceChildren();
-    state.index.forEach(function (item) {
-      const note = state.notes.get(item.date);
-      const topic = note ? note.topic : item.topic;
+  function renderHome() {
+    noteEl.replaceChildren();
+    const intro = document.createElement("p");
+    intro.className = "home-intro";
+    intro.textContent = "依情境複習。點一個情境，看裡面的句型、文法和單字。";
+    const list = document.createElement("ul");
+    list.className = "situation-list";
+    (state.catalog || []).forEach(function (category) {
+      const count = entryCount(category.groups);
+      if (category.name !== UNCATEGORIZED && FIXED_SITUATIONS.indexOf(category.name) === -1 && count === 0) return;
+      if (category.name === UNCATEGORIZED && count === 0) return;
       const li = document.createElement("li");
       const button = document.createElement("button");
       button.type = "button";
-      button.className = "date-chip";
-      if (item.date === state.current) {
-        button.setAttribute("aria-current", "date");
-      }
-      button.setAttribute("aria-label", item.date + " " + topic);
-      const date = document.createElement("span");
-      date.className = "chip-date";
-      date.textContent = item.date;
-      const label = document.createElement("span");
-      label.className = "chip-topic";
-      label.textContent = topic;
-      button.append(date, label);
+      button.className = "situation-card";
+      const name = document.createElement("span");
+      name.textContent = category.name;
+      const meta = document.createElement("span");
+      meta.className = "situation-count";
+      meta.textContent = count + " 項";
+      button.append(name, meta);
       button.addEventListener("click", function () {
-        state.notice = "";
-        resetSearch();
-        openDate(item.date);
-        window.scrollTo(0, 0);
+        navigate({ page: "category", situation: category.name });
       });
       li.appendChild(button);
-      dateList.appendChild(li);
+      list.appendChild(li);
     });
+    noteEl.append(intro, list);
+  }
+
+  function renderCategory(category) {
+    noteEl.replaceChildren();
+    const title = document.createElement("h2");
+    title.className = "situation-title";
+    title.textContent = category.name;
+    noteEl.appendChild(title);
+    const groups = category.groups;
+    appendGroup("句型", sortedRows(groups.patterns), "stack", function (row) {
+      return renderPhrase(row.item, "", "phrase", row.dates);
+    });
+    appendGroup("文法", sortedRows(groups.grammar), "stack", function (row) {
+      return renderGrammar(row.item, "", row.dates);
+    });
+    appendGroup("單字", sortedRows(groups.vocabulary), "vocab-list", function (row) {
+      return renderPhrase(row.item, "", "phrase", row.dates);
+    });
+    appendGroup("例句", sortedRows(groups.examples), "stack", function (row) {
+      return renderPhrase(row.item, "", "phrase example", row.dates);
+    });
+  }
+
+  function appendGroup(title, rows, className, renderRow) {
+    if (!rows.length) return;
+    noteEl.appendChild(sectionBlock(title, rows.map(renderRow), className));
+  }
+
+  function renderMistakes() {
+    noteEl.replaceChildren();
+    const title = document.createElement("h2");
+    title.className = "situation-title";
+    title.textContent = "我常犯的錯";
+    noteEl.appendChild(title);
+    if (!state.mistakes.length) {
+      const empty = document.createElement("p");
+      empty.className = "home-intro";
+      empty.textContent = "目前沒有錯誤訂正。";
+      noteEl.appendChild(empty);
+      return;
+    }
+    const list = document.createElement("div");
+    list.className = "stack";
+    state.mistakes.forEach(function (row) {
+      const card = renderCorrection(row.item, "");
+      card.appendChild(renderDates([row.date]));
+      list.appendChild(card);
+    });
+    noteEl.appendChild(list);
+  }
+
+  function renderDates(dates) {
+    const label = document.createElement("p");
+    label.className = "item-date";
+    label.textContent = dates.slice().sort().reverse().map(formatMonthDay).join(" · ");
+    return label;
+  }
+
+  function formatMonthDay(iso) {
+    const parts = String(iso).split("-");
+    return Number(parts[1]) + "/" + Number(parts[2]);
   }
 
   function renderNote(note) {
@@ -457,7 +545,7 @@
     return section;
   }
 
-  function renderPhrase(item, query, className) {
+  function renderPhrase(item, query, className, dates) {
     const card = document.createElement("article");
     card.className = "card " + className;
     const line = document.createElement("div");
@@ -484,6 +572,7 @@
     zh.lang = "zh-Hant";
     appendHighlighted(zh, item.zh, query);
     card.appendChild(zh);
+    if (dates && dates.length) card.appendChild(renderDates(dates));
     return card;
   }
 
@@ -502,7 +591,7 @@
     });
   }
 
-  function renderGrammar(item, query) {
+  function renderGrammar(item, query, dates) {
     const card = document.createElement("article");
     card.className = "card grammar";
     const point = document.createElement("h4");
@@ -515,6 +604,7 @@
     (item.examples || []).forEach(function (example) {
       card.appendChild(renderGrammarExample(example, query));
     });
+    if (dates && dates.length) card.appendChild(renderDates(dates));
     return card;
   }
 
@@ -595,12 +685,12 @@
       const button = document.createElement("button");
       button.type = "button";
       button.className = "result-jump";
-      button.textContent = formatLong(group.date) + "　" + group.topic;
+      button.textContent = group.situation + "　" + formatMonthDay(group.date);
       button.addEventListener("click", function () {
         state.notice = "";
         resetSearch();
-        openDate(group.date);
-        window.scrollTo(0, 0);
+        if (group.kind === "錯誤訂正") navigate({ page: "mistakes", situation: "" });
+        else navigate({ page: "category", situation: group.situation });
       });
       const hits = document.createElement("div");
       hits.className = "hits";
@@ -618,9 +708,9 @@
         } else if (hit.kind === "錯誤訂正") {
           block.appendChild(renderCorrection(hit.item, query));
         } else if (hit.kind === "文法") {
-          block.appendChild(renderGrammar(hit.item, query));
+          block.appendChild(renderGrammar(hit.item, query, [group.date]));
         } else {
-          block.appendChild(renderPhrase(hit.item, query, "phrase"));
+          block.appendChild(renderPhrase(hit.item, query, "phrase", [group.date]));
         }
         hits.appendChild(block);
       });
@@ -663,7 +753,15 @@
           hits.push({ kind: "錯誤訂正", item: entry });
         }
       });
-      if (hits.length) groups.push({ date: note.date, topic: note.topic, hits: hits });
+      hits.forEach(function (hit) {
+        groups.push({
+          date: note.date,
+          topic: note.topic,
+          situation: hit.kind === "錯誤訂正" ? "我常犯的錯" : ((hit.item && hit.item.situation) || note.situation || UNCATEGORIZED),
+          kind: hit.kind,
+          hits: [hit],
+        });
+      });
     });
     return groups;
   }

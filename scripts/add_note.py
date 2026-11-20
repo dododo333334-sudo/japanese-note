@@ -295,9 +295,10 @@ def parse_note(text: str) -> dict:
     current_header_line = 0
     current_count = 0
     topic_lines: list[str] = []
-    rows: dict[str, list[list[str]]] = {key: [] for key in TRIPLE_KEYS}
+    rows: dict[str, list[tuple[list[str], str | None]]] = {key: [] for key in TRIPLE_KEYS}
     grammar_items: list[dict] = []
     grammar_warnings: list[str] = []
+    default_situation: str | None = None
 
     def close_section() -> None:
         if current is None or current_count > 0:
@@ -331,8 +332,26 @@ def parse_note(text: str) -> dict:
             date = value
             continue
 
+        if stripped.startswith("【情境】"):
+            name = re.sub(r"^[:：]\s*", "", stripped[len("【情境】") :].strip())
+            if not name:
+                add(line_no, "【情境】不可為空")
+            elif default_situation is not None:
+                add(line_no, "【情境】重複")
+            else:
+                default_situation = name
+            continue
+
         def consume_content(content: str, content_line: int) -> None:
             nonlocal current_count
+            try:
+                content, tagged = _split_situation_tag(content)
+            except ValueError:
+                add(content_line, "情境名稱不可為空")
+                return
+            if not content:
+                add(content_line, "情境標記前面沒有項目內容")
+                return
             current_count += 1
             if current == "topic":
                 topic_lines.append(content)
@@ -340,6 +359,7 @@ def parse_note(text: str) -> dict:
             if current == "grammar":
                 item = _parse_grammar_line(content, content_line, add, grammar_warnings)
                 if item is not None:
+                    item["situation"] = tagged or default_situation or UNCATEGORIZED
                     grammar_items.append(item)
                 return
             parts = [part.strip() for part in re.split(r"[|｜]", content)]
@@ -352,7 +372,7 @@ def parse_note(text: str) -> dict:
                 joined = "、".join(str(index) for index in empty_at)
                 add(content_line, f"{header}第 {joined} 個欄位不可為空")
                 return
-            rows[current].append(parts)
+            rows[current].append((parts, tagged))
 
         if stripped.startswith("【"):
             close_section()
@@ -397,28 +417,49 @@ def parse_note(text: str) -> dict:
     if not topic:
         raise NoteError(["錯誤：【主題】不可為空"])
 
+    def place(tagged: str | None) -> str:
+        return tagged or default_situation or UNCATEGORIZED
+
+    def triples(key: str) -> list[dict]:
+        return [
+            {"jp": jp, "reading": reading, "zh": zh, "situation": place(tagged)}
+            for (jp, reading, zh), tagged in rows[key]
+        ]
+
     return {
         "date": date,
         "topic": topic,
-        "patterns": [
-            {"jp": jp, "reading": reading, "zh": zh}
-            for jp, reading, zh in rows["patterns"]
-        ],
-        "vocabulary": [
-            {"jp": jp, "reading": reading, "zh": zh}
-            for jp, reading, zh in rows["vocabulary"]
-        ],
-        "examples": [
-            {"jp": jp, "reading": reading, "zh": zh}
-            for jp, reading, zh in rows["examples"]
-        ],
+        "situation": default_situation or UNCATEGORIZED,
+        "patterns": triples("patterns"),
+        "vocabulary": triples("vocabulary"),
+        "examples": triples("examples"),
         "corrections": [
-            {"wrong": wrong, "correct": correct, "explanation": explanation}
-            for wrong, correct, explanation in rows["corrections"]
+            {
+                "wrong": wrong,
+                "correct": correct,
+                "explanation": explanation,
+                "situation": place(tagged),
+            }
+            for (wrong, correct, explanation), tagged in rows["corrections"]
         ],
         "grammar": grammar_items,
         "_warnings": grammar_warnings,
     }
+
+
+_SITUATION_TAG = re.compile(r"(?:\s+)?#情境[:：]\s*(.*?)\s*$")
+UNCATEGORIZED = "未分類"
+
+
+def _split_situation_tag(line: str) -> tuple[str, str | None]:
+    """Remove a trailing situation tag. Empty category raises ValueError."""
+    match = _SITUATION_TAG.search(line)
+    if not match:
+        return line, None
+    category = match.group(1).strip()
+    if not category:
+        raise ValueError("empty")
+    return line[: match.start()].rstrip(), category
 
 
 def _match_header(line: str) -> str | None:
