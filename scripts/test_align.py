@@ -191,6 +191,49 @@ b｜b｜乙
         note = add_note.parse_note(text)
         self.assertEqual(note["topic"], "餐廳點餐（二）：要水、筷子、收據與離店用語")
 
+    def test_default_situation_and_tags(self) -> None:
+        text = """日期：2026-11-20
+【主題】時間
+【情境】時間與數字
+【句型】
+こんばんは｜こんばんは｜晚安 #情境:招呼用語
+右｜みぎ｜右邊#情境：新情境
+普通｜普通｜留在預設
+【文法】
+點｜說明有／和；｜水を飲む／みずをのむ／喝水 #情境:搭車與買票
+【單字】
+半｜はん｜半
+"""
+        note = add_note.parse_note(text)
+        self.assertEqual(note["situation"], "時間與數字")
+        self.assertEqual(note["patterns"][0]["situation"], "招呼用語")
+        self.assertEqual(note["patterns"][0]["jp"], "こんばんは")
+        self.assertEqual(note["patterns"][0]["zh"], "晚安")
+        self.assertEqual(note["patterns"][1]["situation"], "新情境")
+        self.assertEqual(note["patterns"][1]["jp"], "右")
+        self.assertEqual(note["patterns"][1]["zh"], "右邊")
+        self.assertEqual(note["patterns"][2]["situation"], "時間與數字")
+        self.assertEqual(note["grammar"][0]["situation"], "搭車與買票")
+        self.assertEqual(note["grammar"][0]["explanation"], "說明有／和；")
+        self.assertEqual(note["grammar"][0]["examples"][0]["jp"], "水を飲む")
+        self.assertEqual(note["vocabulary"][0]["situation"], "時間與數字")
+        warnings = add_note.attach_segments(note, {})
+        self.assertFalse(any("#情境" in seg.get("t", "") for seg in note["patterns"][1]["segments"]))
+        self.assertEqual(warnings, [])
+
+    def test_missing_situation_is_uncategorized(self) -> None:
+        text = """日期：2026-11-14
+【主題】
+沒有情境
+【句型】
+a｜a｜甲
+【單字】
+b｜b｜乙
+"""
+        note = add_note.parse_note(text)
+        self.assertEqual(note["situation"], "未分類")
+        self.assertEqual(note["patterns"][0]["situation"], "未分類")
+
     def test_note_without_grammar(self) -> None:
         text = Path(__file__).resolve().parents[1].joinpath("examples/2026-11-14.txt").read_text(encoding="utf-8")
         note = add_note.parse_note(text)
