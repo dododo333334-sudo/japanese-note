@@ -725,7 +725,9 @@
       const note = state.notes.get(item.date);
       if (!note) return;
       const hits = [];
-      if (matches(note.topic, query)) hits.push({ kind: "主題", text: note.topic });
+      (note.topics || [note.topic]).forEach(function (topic) {
+        if (matches(topic, query)) hits.push({ kind: "主題", text: topic });
+      });
       note.patterns.forEach(function (entry) {
         if (matches(entry.jp, query) || matches(entry.reading, query) || matches(entry.zh, query)) {
           hits.push({ kind: "句型", item: entry });
