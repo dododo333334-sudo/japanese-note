@@ -30,7 +30,7 @@ python3 scripts/add_note.py --dry-run examples/2026-11-14.txt
 python3 scripts/add_note.py --force examples/2026-11-14.txt
 ```
 
-成功之後，把 `notes/` 裡變更過的檔案一起提交。網站是靜態檔，由 GitHub Pages 從 `main` 分支的根目錄提供，沒有建置步驟。首頁依情境分類，不依日期瀏覽；每個項目會標學習日期。錯誤訂正集中在「我常犯的錯」。`notes/index.json` 仍依日期由舊到新排序。
+成功之後，把 `notes/` 裡變更過的檔案一起提交。網站是靜態檔，由 GitHub Pages 從 `main` 分支的根目錄提供，沒有建置步驟。GitHub Pages 對檔案送 `max-age=600`，所以 `index.html` 會用版本參數載入 `js/app.js` 和 `css/style.css`。新增筆記時會順便把版本寫進 `version.txt`。若只改了程式或樣式、沒有新筆記，執行 `python3 scripts/add_note.py --sync-assets`，再把 `version.txt` 和 `index.html` 一起提交。頁面每次用 `cache: "no-cache"` 讀 `version.txt`，版本只增不減，手機才不會停在舊的 `app.js`。筆記 JSON 同樣用 `cache: "no-cache"` 讀取。首頁依情境分類，不依日期瀏覽；每個項目會標學習日期。錯誤訂正集中在「我常犯的錯」。`notes/index.json` 仍依日期由舊到新排序。
 
 ## 格式
 

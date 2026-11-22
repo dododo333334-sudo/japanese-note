@@ -241,7 +241,7 @@
   }
 
   function fetchJson(path) {
-    return fetch(new URL(path, pageBase())).then(function (response) {
+    return fetch(new URL(path, pageBase()), { cache: "no-cache" }).then(function (response) {
       if (!response.ok) throw new Error(path);
       return response.json();
     });

@@ -257,6 +257,15 @@ b｜b｜乙
         again = add_note.merge_notes(merged, second)
         self.assertEqual(len(again["patterns"]), 2)
 
+    def test_asset_version_bumps_only_when_the_hash_changes(self) -> None:
+        self.assertEqual(add_note.next_asset_version(4, "abc", "abc"), 4)
+        self.assertEqual(add_note.next_asset_version(4, "abc", "def"), 5)
+        html = '<link href="css/style.css?v=4">\n<script>\nvar current = "4";\n</script>\n'
+        updated = add_note.apply_asset_version(html, "5")
+        self.assertIn('href="css/style.css?v=5"', updated)
+        self.assertIn('var current = "5"', updated)
+        self.assertNotIn("v=4", updated)
+
     def test_note_without_grammar(self) -> None:
         text = Path(__file__).resolve().parents[1].joinpath("examples/2026-11-14.txt").read_text(encoding="utf-8")
         note = add_note.parse_note(text)

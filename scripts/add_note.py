@@ -9,6 +9,7 @@ to this repository's scripts folder.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -18,6 +19,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 NOTES_DIR = ROOT / "notes"
 INDEX_PATH = NOTES_DIR / "index.json"
+INDEX_HTML = ROOT / "index.html"
+VERSION_PATH = ROOT / "version.txt"
+ASSET_PATHS = (ROOT / "css" / "style.css", ROOT / "js" / "app.js")
 
 SECTION_OF = {
     "【主題】": "topic",
@@ -605,6 +609,55 @@ def day_exists(date: str) -> bool:
     return any(item.get("date") == date for item in load_index())
 
 
+def asset_hash() -> str:
+    digest = hashlib.sha256()
+    for path in ASSET_PATHS:
+        digest.update(path.name.encode())
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+    return digest.hexdigest()[:12]
+
+
+def next_asset_version(number: int, previous_hash: str, digest: str) -> int:
+    if digest != previous_hash:
+        return number + 1
+    return number
+
+
+def read_version_record() -> tuple[int, str]:
+    if not VERSION_PATH.is_file():
+        return 0, ""
+    lines = VERSION_PATH.read_text(encoding="utf-8").splitlines()
+    number = int(lines[0]) if lines and lines[0].isdigit() else 0
+    digest = lines[1].strip() if len(lines) > 1 else ""
+    return number, digest
+
+
+def apply_asset_version(html: str, version: str) -> str:
+    if not re.fullmatch(r"[0-9]+", version):
+        raise NoteError([f"錯誤：資源版本必須是數字，目前是 {version}"])
+    html, css_count = re.subn(r"(css/style\.css\?v=)[0-9]+", rf"\g<1>{version}", html, count=1)
+    html, script_count = re.subn(r'(var current = ")[0-9]+(")', rf"\g<1>{version}\2", html, count=1)
+    if css_count != 1 or script_count != 1:
+        raise NoteError(["錯誤：index.html 找不到 css/style.css 或 app.js 的版本標記"])
+    return html
+
+
+def sync_asset_version() -> int:
+    """Bump the asset query when app.js or style.css changes, and never move it backwards."""
+    digest = asset_hash()
+    number, previous = read_version_record()
+    version = next_asset_version(number, previous, digest)
+    html = INDEX_HTML.read_text(encoding="utf-8")
+    updated = apply_asset_version(html, str(version))
+    if updated != html:
+        write_text(INDEX_HTML, updated)
+    record = f"{version}\n{digest}\n"
+    if not VERSION_PATH.is_file() or VERSION_PATH.read_text(encoding="utf-8") != record:
+        write_text(VERSION_PATH, record)
+    return version
+
+
 def dump_json(data: object) -> str:
     return json.dumps(data, ensure_ascii=False, indent=2) + "\n"
 
@@ -644,11 +697,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--dry-run", action="store_true", help="只驗證格式，不寫入檔案。")
     parser.add_argument("--force", action="store_true", help="覆寫已經存在的同一天筆記。")
+    parser.add_argument(
+        "--sync-assets",
+        action="store_true",
+        help="依 js/app.js 與 css/style.css 的內容更新 version.txt 和 index.html 的版本參數。",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    if args.sync_assets and not args.path:
+        try:
+            version = sync_asset_version()
+        except NoteError as exc:
+            print("\n".join(exc.messages), file=sys.stderr)
+            return 1
+        print(f"已更新靜態資源版本 {version}")
+        return 0
     try:
         note = parse_note(read_source(args.path))
         warnings = list(note.pop("_warnings", []))
@@ -674,6 +740,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         write_text(NOTES_DIR / f"{note['date']}.json", dump_json(note))
         write_text(INDEX_PATH, dump_json(merge_index(load_index(), note)))
+        sync_asset_version()
         if merging:
             action = "已併入"
         elif existing:
