@@ -111,13 +111,25 @@
     mainEl.insertBefore(box, mainEl.firstChild);
   }
 
-  function createSpeakButton(japanese) {
+  function spokenJapanese(item) {
+    const reading = String((item && item.reading) || "").trim();
+    const surface = String((item && item.jp) || "").trim();
+    return speakableReading(reading || surface);
+  }
+
+  function speakableReading(text) {
+    return String(text || "")
+      .replace(/[〇○]/g, "まる")
+      .replace(/[／/]/g, "、");
+  }
+
+  function createSpeakButton(text) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "speak";
     button.setAttribute("aria-label", "播放日文發音");
     button.setAttribute("aria-pressed", "false");
-    button.dataset.jp = japanese;
+    button.dataset.speak = text;
     const icon = document.createElement("span");
     icon.setAttribute("aria-hidden", "true");
     icon.textContent = "🔊";
@@ -128,7 +140,7 @@
 
   function speakJapanese(event) {
     const button = event.currentTarget;
-    const text = button.dataset.jp || "";
+    const text = button.dataset.speak || "";
     if (!speech.supported) {
       showSpeechNotice();
       return;
@@ -558,7 +570,7 @@
     } else {
       appendHighlighted(jp, item.jp, query);
     }
-    line.append(jp, createSpeakButton(item.jp));
+    line.append(jp, createSpeakButton(spokenJapanese(item)));
     card.appendChild(line);
     if (!(item.segments && item.segments.length) && !sameText(item.jp, item.reading)) {
       const reading = document.createElement("p");
@@ -621,7 +633,7 @@
     } else {
       appendHighlighted(jp, example.jp, query);
     }
-    line.append(jp, createSpeakButton(example.jp));
+    line.append(jp, createSpeakButton(spokenJapanese(example)));
     block.appendChild(line);
     if (!(example.segments && example.segments.length) && example.reading && !sameText(example.jp, example.reading)) {
       const reading = document.createElement("p");
