@@ -234,6 +234,29 @@ b｜b｜乙
         self.assertEqual(note["situation"], "未分類")
         self.assertEqual(note["patterns"][0]["situation"], "未分類")
 
+    def test_second_topic_merges_without_dropping_the_first(self) -> None:
+        first = add_note.parse_note(
+            "日期：2026-11-21\n【主題】問價錢\n【情境】時間與數字\n【句型】\n円です｜えんです｜日圓\n【單字】\n円｜えん｜日圓\n"
+        )
+        first.pop("_warnings", None)
+        second = add_note.parse_note(
+            "日期：2026-11-21\n【主題】道別用語\n【情境】招呼用語\n【句型】\nまた明日ね｜またあしたね｜明天見\n【錯誤訂正】\nまだ明日ね｜また明日ね｜濁點不同\n"
+        )
+        second.pop("_warnings", None)
+        add_note.attach_segments(second, {})
+        merged = add_note.merge_notes(first, second)
+        self.assertEqual(merged["topics"], ["問價錢", "道別用語"])
+        self.assertEqual([item["jp"] for item in merged["patterns"]], ["円です", "また明日ね"])
+        self.assertEqual(merged["patterns"][1]["situation"], "招呼用語")
+        ruby = "".join(
+            f"{segment['t']}({segment['r']})" if segment.get("r") else segment["t"]
+            for segment in merged["patterns"][1]["segments"]
+        )
+        self.assertEqual(ruby, "また明日(あした)ね")
+        self.assertEqual(merged["corrections"][0]["wrong"], "まだ明日ね")
+        again = add_note.merge_notes(merged, second)
+        self.assertEqual(len(again["patterns"]), 2)
+
     def test_note_without_grammar(self) -> None:
         text = Path(__file__).resolve().parents[1].joinpath("examples/2026-11-14.txt").read_text(encoding="utf-8")
         note = add_note.parse_note(text)
