@@ -29,7 +29,7 @@ SECTION_OF = {
 }
 HEADER_OF = {value: key for key, value in SECTION_OF.items()}
 TRIPLE_KEYS = ("patterns", "vocabulary", "examples", "corrections")
-REQUIRED_KEYS = ("topic", "patterns", "vocabulary")
+REQUIRED_KEYS = ("topic", "patterns")
 OVERRIDES_PATH = NOTES_DIR / "ruby-overrides.json"
 
 # Punctuation and whitespace are ignored when a kana anchor is matched to the reading.
@@ -524,6 +524,59 @@ def _parse_grammar_line(
     return {"point": point, "explanation": explanation, "examples": examples}
 
 
+def note_topics(note: dict) -> list[str]:
+    topics = note.get("topics")
+    if isinstance(topics, list):
+        names = [topic for topic in topics if isinstance(topic, str) and topic]
+        if names:
+            return names
+    topic = note.get("topic")
+    return [topic] if isinstance(topic, str) and topic else []
+
+
+def _item_key(kind: str, item: dict) -> str:
+    if kind == "grammar":
+        examples = "\u0002".join(
+            "\u0001".join([example.get("jp", ""), example.get("reading", ""), example.get("zh", "")])
+            for example in item.get("examples") or []
+        )
+        return "\u0000".join([item.get("point", ""), item.get("explanation", ""), examples])
+    if kind == "corrections":
+        return "\u0000".join([item.get("wrong", ""), item.get("correct", ""), item.get("explanation", "")])
+    return "\u0000".join([item.get("jp", ""), item.get("reading", ""), item.get("zh", "")])
+
+
+def merge_notes(existing: dict, incoming: dict) -> dict:
+    """Keep the day's current items and append a second topic."""
+    merged = dict(existing)
+    topics = note_topics(existing)
+    if incoming["topic"] not in topics:
+        topics.append(incoming["topic"])
+    merged["topics"] = topics
+    merged["topic"] = "；".join(topics)
+    for key in ("patterns", "vocabulary", "examples", "grammar", "corrections"):
+        current = list(existing.get(key) or [])
+        seen = {_item_key(key, item) for item in current}
+        for item in incoming.get(key) or []:
+            key_text = _item_key(key, item)
+            if key_text in seen:
+                continue
+            seen.add(key_text)
+            current.append(item)
+        merged[key] = current
+    return merged
+
+
+def load_day(date: str) -> dict | None:
+    path = NOTES_DIR / f"{date}.json"
+    if not path.is_file():
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise NoteError([f"錯誤：notes/{date}.json 格式不正確"])
+    return data
+
+
 def merge_index(entries: list[dict], note: dict) -> list[dict]:
     """Return index entries with this day inserted, sorted by date."""
     merged = [item for item in entries if item.get("date") != note["date"]]
@@ -602,16 +655,31 @@ def main(argv: list[str] | None = None) -> int:
         warnings.extend(attach_segments(note))
         for warning in warnings:
             print(warning, file=sys.stderr)
-        exists = day_exists(note["date"])
-        if exists and not args.force:
-            raise NoteError([f"錯誤：{note['date']} 的筆記已存在。若要覆寫請加上 --force"])
+        existing = load_day(note["date"])
+        topics = note_topics(existing) if existing else []
+        same_topic = note["topic"] in topics
+        if existing and same_topic and not args.force:
+            raise NoteError([f"錯誤：{note['date']} 已有主題「{note['topic']}」。若要整篇覆寫請加上 --force"])
+        merging = bool(existing) and not same_topic and not args.force
+        if merging:
+            note = merge_notes(existing, note)
         if args.dry_run:
-            suffix = "（將覆寫既有檔案，尚未寫入）" if exists else "（未寫入檔案）"
+            if merging:
+                suffix = "（將併入既有筆記，尚未寫入）"
+            elif existing:
+                suffix = "（將整篇覆寫，尚未寫入）"
+            else:
+                suffix = "（未寫入檔案）"
             print(f"驗證通過：{note['date']} {note['topic']}{suffix}")
             return 0
         write_text(NOTES_DIR / f"{note['date']}.json", dump_json(note))
         write_text(INDEX_PATH, dump_json(merge_index(load_index(), note)))
-        action = "已覆寫" if exists else "已寫入"
+        if merging:
+            action = "已併入"
+        elif existing:
+            action = "已覆寫"
+        else:
+            action = "已寫入"
         print(f"{action} notes/{note['date']}.json，並更新 notes/index.json")
         return 0
     except NoteError as exc:
