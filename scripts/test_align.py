@@ -76,6 +76,18 @@ class AlignReadingTest(unittest.TestCase):
         self.assertFalse(fallback)
         self.assertEqual(segments, [{"t": "すみません"}])
 
+    def test_comma_between_compounds_uses_override(self) -> None:
+        segments, fallback = add_note.align_reading(
+            "今夜、帰りたくないな",
+            "こんや、かえりたくないな",
+            add_note.load_overrides(),
+        )
+        self.assertFalse(fallback)
+        self.assertEqual(
+            add_note_format(segments),
+            "今夜(こんや)、帰(かえ)りたくないな",
+        )
+
     def test_override(self) -> None:
         segments, fallback = add_note.align_reading(
             "お願いします",
