@@ -76,6 +76,18 @@ class AlignReadingTest(unittest.TestCase):
         self.assertFalse(fallback)
         self.assertEqual(segments, [{"t": "すみません"}])
 
+    def test_weekend_free_splits_around_the_comma(self) -> None:
+        segments, fallback = add_note.align_reading(
+            "今度の週末、空いてる？",
+            "こんどのしゅうまつ、あいてる？",
+            add_note.load_overrides(),
+        )
+        self.assertFalse(fallback)
+        self.assertEqual(
+            add_note_format(segments),
+            "今度(こんど)の週末(しゅうまつ)、空(あ)いてる？",
+        )
+
     def test_comma_between_compounds_uses_override(self) -> None:
         segments, fallback = add_note.align_reading(
             "今夜、帰りたくないな",
