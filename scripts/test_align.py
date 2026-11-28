@@ -76,6 +76,19 @@ class AlignReadingTest(unittest.TestCase):
         self.assertFalse(fallback)
         self.assertEqual(segments, [{"t": "すみません"}])
 
+    def test_arrival_and_outfit_keep_each_reading(self) -> None:
+        overrides = add_note.load_overrides()
+        arrived, arrived_fallback = add_note.align_reading("今来たところ", "いまきたところ", overrides)
+        outfit, outfit_fallback = add_note.align_reading(
+            "その服、似合ってるね",
+            "そのふく、にあってるね",
+            overrides,
+        )
+        self.assertFalse(arrived_fallback)
+        self.assertFalse(outfit_fallback)
+        self.assertEqual(add_note_format(arrived), "今(いま)来(き)たところ")
+        self.assertEqual(add_note_format(outfit), "その服(ふく)、似合(にあ)ってるね")
+
     def test_weekend_free_splits_around_the_comma(self) -> None:
         segments, fallback = add_note.align_reading(
             "今度の週末、空いてる？",
